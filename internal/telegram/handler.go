@@ -6,6 +6,7 @@ import (
 	"interview-bot-complete/internal/extractor"
 	"interview-bot-complete/internal/interviewer"
 	"interview-bot-complete/internal/storage"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -55,6 +56,34 @@ func (rl *RateLimiter) IsAllowed(userID int64) bool {
 	return true
 }
 
+// Handler обрабатывает сообщения от пользователей
+type Handler struct {
+	bot           *Bot
+	config        *config.Config
+	interviewer   *interviewer.Service
+	extractor     *extractor.Service
+	sessions      map[int64]*UserSession
+	sessionsMutex sync.RWMutex
+	rateLimiter   *RateLimiter
+}
+
+// NewHandler создает новый обработчик
+func NewHandler(bot *Bot, cfg *config.Config, interviewerService *interviewer.Service, extractorService *extractor.Service) *Handler {
+	handler := &Handler{
+		bot:         bot,
+		config:      cfg,
+		interviewer: interviewerService,
+		extractor:   extractorService,
+		sessions:    make(map[int64]*UserSession),
+		rateLimiter: NewRateLimiter(10, time.Minute), // 10 сообщений в минуту
+	}
+
+	// Запускаем очистку сессий
+	handler.startSessionCleanup()
+
+	return handler
+}
+
 // Добавить очистку неактивных сессий
 func (h *Handler) startSessionCleanup() {
 	ticker := time.NewTicker(1 * time.Hour)
@@ -78,30 +107,6 @@ func (h *Handler) cleanupInactiveSessions() {
 	}
 }
 
-// Handler обрабатывает сообщения от пользователей
-type Handler struct {
-	bot           *Bot
-	config        *config.Config
-	interviewer   *interviewer.Service
-	extractor     *extractor.Service
-	sessions      map[int64]*UserSession
-	sessionsMutex sync.RWMutex
-	rateLimiter   *RateLimiter
-}
-
-// NewHandler создает новый обработчик
-func NewHandler(bot *Bot, cfg *config.Config, interviewerService *interviewer.Service, extractorService *extractor.Service) *Handler {
-	return &Handler{
-		bot:         bot,
-		config:      cfg,
-		interviewer: interviewerService,
-		extractor:   extractorService,
-		sessions:    make(map[int64]*UserSession),
-		rateLimiter: NewRateLimiter(10, time.Minute), // 10 сообщений в минуту
-
-	}
-}
-
 // HandleUpdate обрабатывает обновление от Telegram
 func (h *Handler) HandleUpdate(update Update) {
 	if update.Message == nil || update.Message.From == nil {
@@ -111,6 +116,12 @@ func (h *Handler) HandleUpdate(update Update) {
 	userID := update.Message.From.ID
 	chatID := update.Message.Chat.ID
 	text := strings.TrimSpace(update.Message.Text)
+
+	// Проверяем rate limit
+	if !h.rateLimiter.IsAllowed(userID) {
+		h.bot.SendMessage(chatID, "⏳ Слишком много сообщений. Пожалуйста, подождите минуту.")
+		return
+	}
 
 	// Получаем или создаем сессию пользователя
 	session := h.getOrCreateSession(userID)
@@ -138,6 +149,10 @@ func (h *Handler) handleCommand(chatID int64, command string, session *UserSessi
 		h.handleRestartCommand(chatID, session)
 	case "/stop":
 		h.handleStopCommand(chatID, session)
+	case "/getprofile":
+		h.handleGetProfileCommand(chatID, session)
+	case "/getsummary":
+		h.handleGetSummaryCommand(chatID, session)
 	default:
 		h.bot.SendMessage(chatID, "Неизвестная команда. Используйте /help для получения списка команд.")
 	}
@@ -163,6 +178,8 @@ func (h *Handler) handleHelpCommand(chatID int64) {
 /status - Проверить прогресс текущего интервью
 /restart - Перезапустить интервью
 /stop - Остановить текущее интервью
+/getprofile - Получить полный JSON профиль (после завершения)
+/getsummary - Получить краткое резюме профиля (после завершения)
 /help - Показать это сообщение
 
 *Как это работает:*
@@ -178,6 +195,11 @@ func (h *Handler) handleHelpCommand(chatID int64) {
 • Анализ семейных паттернов
 • Карьерные ориентации
 • Способы преодоления трудностей
+
+*📄 Получение результатов:*
+• После завершения интервью профиль отправляется автоматически
+• Используйте /getprofile для повторного получения JSON
+• Используйте /getsummary для краткого резюме
 
 *Совет:* Чем подробнее ваши ответы, тем точнее будет анализ!`
 
@@ -203,7 +225,7 @@ func (h *Handler) handleStatusCommand(chatID int64, session *UserSession) {
 			h.getStateDescription(session.State))
 		h.bot.SendMessage(chatID, progress)
 	case StateCompleted:
-		h.bot.SendFormattedMessage(chatID, "✅ Интервью завершено!\n🆔 ID: `%s`", session.InterviewID)
+		h.bot.SendFormattedMessage(chatID, "✅ Интервью завершено!\n🆔 ID: `%s`\n\n_Используйте /getprofile для получения JSON профиля_", session.InterviewID)
 	}
 }
 
@@ -224,6 +246,62 @@ func (h *Handler) handleStopCommand(chatID int64, session *UserSession) {
 	h.bot.SendMessage(chatID, "🛑 Интервью остановлено.")
 }
 
+// handleGetProfileCommand получает профиль по команде
+func (h *Handler) handleGetProfileCommand(chatID int64, session *UserSession) {
+	if session.State != StateCompleted || session.InterviewID == "" {
+		h.bot.SendMessage(chatID, "❌ Профиль доступен только после завершения интервью. Используйте /start для начала нового интервью.")
+		return
+	}
+
+	// Загружаем профиль из файла
+	fileName := fmt.Sprintf("output/profile_%s.json", session.InterviewID)
+	profileData, err := os.ReadFile(fileName)
+	if err != nil {
+		h.bot.SendMessage(chatID, "❌ Профиль не найден. Возможно, он еще не был создан или файл был удален.")
+		return
+	}
+
+	h.bot.SendMessage(chatID, "📤 Отправляю ваш JSON профиль...")
+	h.sendJSONProfile(chatID, string(profileData), session.InterviewID)
+}
+
+// handleGetSummaryCommand получает краткое резюме по команде
+func (h *Handler) handleGetSummaryCommand(chatID int64, session *UserSession) {
+	if session.State != StateCompleted || session.InterviewID == "" {
+		h.bot.SendMessage(chatID, "❌ Резюме доступно только после завершения интервью. Используйте /start для начала нового интервью.")
+		return
+	}
+
+	// Загружаем профиль из файла
+	fileName := fmt.Sprintf("output/profile_%s.json", session.InterviewID)
+	profileData, err := os.ReadFile(fileName)
+	if err != nil {
+		h.bot.SendMessage(chatID, "❌ Профиль не найден. Возможно, он еще не был создан или файл был удален.")
+		return
+	}
+
+	// Получаем краткое резюме
+	if h.extractor != nil {
+		summary, err := h.extractor.GetProfileSummary(string(profileData))
+		if err != nil {
+			h.bot.SendMessage(chatID, "❌ Ошибка создания резюме: "+err.Error())
+			return
+		}
+
+		resultMessage := fmt.Sprintf(`🎯 *Краткое резюме профиля:*
+
+%s
+
+💾 Полный профиль: `+"`%s`"+`
+
+_Используйте /getprofile для получения полного JSON профиля_`, summary, fileName)
+
+		h.bot.SendMessage(chatID, resultMessage)
+	} else {
+		h.bot.SendMessage(chatID, "❌ Сервис анализа профилей недоступен.")
+	}
+}
+
 // Улучшенная валидация пользовательского ввода
 func (h *Handler) validateUserInput(text string) error {
 	if len(text) > 4000 {
@@ -231,14 +309,14 @@ func (h *Handler) validateUserInput(text string) error {
 	}
 
 	// Проверка на спам/повторяющиеся символы
-	if strings.Count(text, text[:1]) > len(text)*1 && len(text) > 10 {
+	if len(text) > 10 && strings.Count(text, text[:1]) > len(text)*8/10 {
 		return fmt.Errorf("сообщение содержит слишком много повторяющихся символов")
 	}
 
 	return nil
 }
 
-// Обновленный handleUserInput
+// handleUserInput обрабатывает ответы пользователя
 func (h *Handler) handleUserInput(chatID int64, text string, session *UserSession) {
 	if session.State != StateWaitingAnswer {
 		h.bot.SendMessage(chatID, "Сейчас не время для ответов. Используйте /start для начала интервью или /help для помощи.")
@@ -250,6 +328,9 @@ func (h *Handler) handleUserInput(chatID int64, text string, session *UserSessio
 		h.bot.SendMessage(chatID, "❌ "+err.Error())
 		return
 	}
+
+	// Обновляем активность сессии
+	session.LastActivity = time.Now()
 
 	h.processUserAnswer(chatID, text, session)
 }
@@ -264,6 +345,7 @@ func (h *Handler) initializeInterview(chatID int64, session *UserSession) {
 	session.State = StateInterview
 	session.CurrentBlock = 1
 	session.QuestionCount = 0
+	session.LastActivity = time.Now()
 	session.Result = &storage.InterviewResult{
 		InterviewID: session.InterviewID,
 		Timestamp:   time.Now().Format(time.RFC3339),
@@ -367,63 +449,7 @@ func (h *Handler) startNextBlock(chatID int64, session *UserSession) {
 	h.generateNextQuestion(chatID, session)
 }
 
-// Вспомогательные методы
-func (h *Handler) getOrCreateSession(userID int64) *UserSession {
-	h.sessionsMutex.Lock()
-	defer h.sessionsMutex.Unlock()
-
-	if session, exists := h.sessions[userID]; exists {
-		return session
-	}
-
-	session := &UserSession{
-		UserID: userID,
-		State:  StateIdle,
-	}
-	h.sessions[userID] = session
-	return session
-}
-
-func (h *Handler) resetSession(session *UserSession) {
-	session.State = StateIdle
-	session.CurrentBlock = 0
-	session.QuestionCount = 0
-	session.CurrentDialogue = []storage.QA{}
-	session.CumulativeSummaries = []string{}
-	session.Result = nil
-	session.InterviewID = ""
-}
-
-func (h *Handler) getCurrentBlockTitle(blockNum int) string {
-	if blockNum <= 0 || blockNum > len(h.config.Blocks) {
-		return "Неизвестный блок"
-	}
-	return h.config.Blocks[blockNum-1].Title
-}
-
-func (h *Handler) getStateDescription(state SessionState) string {
-	switch state {
-	case StateIdle:
-		return "Ожидание"
-	case StateInterview:
-		return "Интервью"
-	case StateWaitingAnswer:
-		return "Ожидание ответа"
-	case StateCompleted:
-		return "Завершено"
-	default:
-		return "Неизвестно"
-	}
-}
-
-func (h *Handler) isBlockComplete(question string) bool {
-	lowerQuestion := strings.ToLower(question)
-	return strings.Contains(lowerQuestion, "завершаем") ||
-		strings.Contains(lowerQuestion, "переходим") ||
-		strings.Contains(lowerQuestion, "блок завершен") ||
-		strings.Contains(lowerQuestion, "следующий блок")
-}
-
+// finishCurrentBlock завершает текущий блок
 func (h *Handler) finishCurrentBlock(chatID int64, session *UserSession) {
 	h.bot.SendMessage(chatID, "📝 Обрабатываю блок...")
 
@@ -455,6 +481,7 @@ func (h *Handler) finishCurrentBlock(chatID int64, session *UserSession) {
 	h.startNextBlock(chatID, session)
 }
 
+// completeInterview завершает интервью
 func (h *Handler) completeInterview(chatID int64, session *UserSession) {
 	// Сохраняем результат интервью
 	err := storage.SaveResult(session.Result)
@@ -516,7 +543,7 @@ func (h *Handler) processProfileExtraction(chatID int64, session *UserSession) {
 		summary = "Профиль создан, но не удалось сгенерировать резюме."
 	}
 
-	// Отправляем результат пользователю
+	// Отправляем резюме профиля
 	resultMessage := fmt.Sprintf(`🎯 *Анализ профиля завершен!*
 
 %s
@@ -535,6 +562,125 @@ _Этот анализ создан искусственным интеллек�
 		fileName)
 
 	h.bot.SendMessage(chatID, resultMessage)
+
+	// Отправляем JSON профиль отдельным сообщением
+	h.sendJSONProfile(chatID, profileResult.ProfileJSON, session.InterviewID)
+}
+
+// sendJSONProfile отправляет JSON профиль
+func (h *Handler) sendJSONProfile(chatID int64, profileJSON string, interviewID string) {
+	// Проверяем размер JSON
+	if len(profileJSON) > 4096 {
+		// Если JSON слишком большой, разбиваем на части
+		h.sendLargeJSONProfile(chatID, profileJSON, interviewID)
+		return
+	}
+
+	// Отправляем JSON в code block для лучшего форматирования
+	jsonMessage := fmt.Sprintf("📄 *Полный JSON профиль:*\n\n```json\n%s\n```", profileJSON)
+
+	err := h.bot.SendMessage(chatID, jsonMessage)
+	if err != nil {
+		// Если ошибка отправки (возможно, слишком длинное сообщение), пробуем разбить
+		h.sendLargeJSONProfile(chatID, profileJSON, interviewID)
+	}
+}
+
+// sendLargeJSONProfile отправляет большие JSON профили по частям
+func (h *Handler) sendLargeJSONProfile(chatID int64, profileJSON string, interviewID string) {
+	h.bot.SendMessage(chatID, "📄 *Полный JSON профиль (большой размер, отправляю частями):*")
+
+	// Максимальная длина сообщения в Telegram около 4096 символов
+	// Оставляем место для форматирования
+	maxChunkSize := 3500
+
+	jsonBytes := []byte(profileJSON)
+	totalChunks := (len(jsonBytes) + maxChunkSize - 1) / maxChunkSize
+
+	for i := 0; i < totalChunks; i++ {
+		start := i * maxChunkSize
+		end := start + maxChunkSize
+		if end > len(jsonBytes) {
+			end = len(jsonBytes)
+		}
+
+		chunk := string(jsonBytes[start:end])
+
+		// Форматируем каждую часть
+		chunkMessage := fmt.Sprintf("📄 *Часть %d/%d:*\n\n```json\n%s\n```",
+			i+1, totalChunks, chunk)
+
+		err := h.bot.SendMessage(chatID, chunkMessage)
+		if err != nil {
+			h.bot.SendMessage(chatID, fmt.Sprintf("❌ Ошибка отправки части %d профиля: %v", i+1, err))
+		}
+
+		// Небольшая задержка между сообщениями
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	// Отправляем информацию о том, где найти полный файл
+	h.bot.SendMessage(chatID, fmt.Sprintf("✅ JSON профиль отправлен полностью!\n\n💾 Также сохранен в файле: `%s`",
+		fmt.Sprintf("output/profile_%s.json", interviewID)))
+}
+
+// Вспомогательные методы
+func (h *Handler) getOrCreateSession(userID int64) *UserSession {
+	h.sessionsMutex.Lock()
+	defer h.sessionsMutex.Unlock()
+
+	if session, exists := h.sessions[userID]; exists {
+		return session
+	}
+
+	session := &UserSession{
+		UserID:       userID,
+		State:        StateIdle,
+		LastActivity: time.Now(),
+	}
+	h.sessions[userID] = session
+	return session
+}
+
+func (h *Handler) resetSession(session *UserSession) {
+	session.State = StateIdle
+	session.CurrentBlock = 0
+	session.QuestionCount = 0
+	session.CurrentDialogue = []storage.QA{}
+	session.CumulativeSummaries = []string{}
+	session.Result = nil
+	session.InterviewID = ""
+	session.LastActivity = time.Now()
+}
+
+func (h *Handler) getCurrentBlockTitle(blockNum int) string {
+	if blockNum <= 0 || blockNum > len(h.config.Blocks) {
+		return "Неизвестный блок"
+	}
+	return h.config.Blocks[blockNum-1].Title
+}
+
+func (h *Handler) getStateDescription(state SessionState) string {
+	switch state {
+	case StateIdle:
+		return "Ожидание"
+	case StateInterview:
+		return "Интервью"
+	case StateWaitingAnswer:
+		return "Ожидание ответа"
+	case StateCompleted:
+		return "Завершено"
+	default:
+		return "Неизвестно"
+	}
+}
+
+func (h *Handler) isBlockComplete(question string) bool {
+	lowerQuestion := strings.ToLower(question)
+	return strings.Contains(lowerQuestion, "завершаем") ||
+		strings.Contains(lowerQuestion, "переходим") ||
+		strings.Contains(lowerQuestion, "блок завершен") ||
+		strings.Contains(lowerQuestion, "следующий блок")
 }
 
 func (h *Handler) getTotalAnswersCount(result *storage.InterviewResult) int {

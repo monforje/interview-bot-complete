@@ -1,0 +1,26 @@
+{
+  "_metadata": {
+    "processing_info": {
+      "extraction_method": "contextual_answers",
+      "extraction_source": "telegram_bot",
+      "schema_version": "1.0",
+      "text_length": 290
+    },
+    "source_interview": {
+      "completion_rate": 100,
+      "interview_id": "79515c58-6f8f-49f1-96e6-310b35b9c292",
+      "timestamp": "2025-07-09T07:49:37+10:00",
+      "total_answers": 1,
+      "total_blocks": 1,
+      "total_questions": 1
+    }
+  },
+  "family": {
+    "childhood": {
+      "structure": "полная"
+    },
+    "parents": {
+      "influence": "Очень плотно, я их люблю"
+    }
+  }
+}

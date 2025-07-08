@@ -186,7 +186,7 @@ func cleanJSONResponse(response string) string {
 // GetUsageStats возвращает статистику использования токенов (доступно только в OpenAI)
 func (c *OpenAIClient) GetUsageStats(prompt string) (*Usage, error) {
 	reqBody := OpenAIRequest{
-		Model: "gpt-4o",
+		Model: "gpt-4.1-mini",
 		Messages: []Message{
 			{
 				Role:    "user",

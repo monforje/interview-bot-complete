@@ -1,0 +1,23 @@
+interview_config:
+  total_blocks: 1
+  questions_per_block: 1
+  max_followup_questions: 0
+
+blocks:
+  - id: 1
+    name: "childhood_family"
+    title: "Детство и семья"
+    context_prompt: |
+      Задай 1 ключевой вопрос о семье и детстве.
+      Если ответ поверхностный - задай 1 уточняющий вопрос.
+    focus_areas:
+      - "Семейная структура и влияние"
+
+summary_structure:
+  key_facts: []
+  important_themes: []
+  emotional_markers: []
+  behavioral_patterns: []
+  values_beliefs: []
+  priorities: []
+  sensitive_topics: []

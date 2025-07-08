@@ -2,9 +2,14 @@ package api
 
 import (
 	"bytes"
+	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
+	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -13,6 +18,7 @@ import (
 type OpenAIClient struct {
 	apiKey string
 	client *http.Client
+	logger *slog.Logger
 }
 
 type OpenAIRequest struct {
@@ -56,11 +62,29 @@ type APIError struct {
 }
 
 func NewOpenAIClient(apiKey string) *OpenAIClient {
+	// Настройка транспорта для лучшей производительности
+	transport := &http.Transport{
+		MaxIdleConns:        100,
+		MaxConnsPerHost:     100,
+		MaxIdleConnsPerHost: 100,
+		IdleConnTimeout:     90 * time.Second,
+		TLSHandshakeTimeout: 10 * time.Second,
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: false,
+		},
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+	}
+
 	return &OpenAIClient{
 		apiKey: apiKey,
 		client: &http.Client{
-			Timeout: 120 * time.Second, // Увеличенный таймаут для сложных запросов
+			Timeout:   120 * time.Second,
+			Transport: transport,
 		},
+		logger: slog.Default(),
 	}
 }
 
@@ -76,66 +100,74 @@ func NewOpenAIClientWithConfig(apiKey, model string, maxTokens int, temperature 
 }
 
 func (c *OpenAIClient) ExtractProfile(prompt string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
 	reqBody := OpenAIRequest{
-		Model: "gpt-4o", // Используем самую современную модель GPT-4o
+		Model: "gpt-4", // Обновить на более стабильную модель
 		Messages: []Message{
 			{
 				Role:    "user",
 				Content: prompt,
 			},
 		},
-		Temperature: 0.1,  // Низкая температура для точности
-		MaxTokens:   4000, // Увеличен лимит для более детальных профилей
+		Temperature: 0.1,
+		MaxTokens:   4000,
 	}
 
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
+		c.logger.Error("Failed to marshal request", "error", err)
 		return "", fmt.Errorf("error marshaling request: %w", err)
 	}
 
-	// Создание запроса к официальному OpenAI API
-	req, err := http.NewRequest("POST", "https://api.openai.com/v1/chat/completions", bytes.NewBuffer(jsonBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.openai.com/v1/chat/completions", bytes.NewBuffer(jsonBody))
 	if err != nil {
+		c.logger.Error("Failed to create request", "error", err)
 		return "", fmt.Errorf("error creating request: %w", err)
 	}
 
-	// Установка заголовков для OpenAI API
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 
 	resp, err := c.client.Do(req)
 	if err != nil {
+		c.logger.Error("Failed to make request", "error", err)
 		return "", fmt.Errorf("error making request: %w", err)
 	}
 	defer resp.Body.Close()
 
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		c.logger.Error("Failed to read response", "error", err)
 		return "", fmt.Errorf("error reading response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		c.logger.Error("OpenAI API error", "status", resp.StatusCode, "body", string(body))
 		return "", fmt.Errorf("OpenAI API error: status %d, body: %s", resp.StatusCode, string(body))
 	}
 
 	var openAIResp OpenAIResponse
 	if err := json.Unmarshal(body, &openAIResp); err != nil {
+		c.logger.Error("Failed to unmarshal response", "error", err)
 		return "", fmt.Errorf("error unmarshaling response: %w", err)
 	}
 
 	if openAIResp.Error != nil {
+		c.logger.Error("OpenAI API returned error", "error", openAIResp.Error.Message)
 		return "", fmt.Errorf("OpenAI API error: %s", openAIResp.Error.Message)
 	}
 
 	if len(openAIResp.Choices) == 0 {
+		c.logger.Error("No choices returned from OpenAI API")
 		return "", fmt.Errorf("no choices returned from OpenAI API")
 	}
 
 	content := openAIResp.Choices[0].Message.Content
-
-	// Очистка от markdown форматирования
 	content = cleanJSONResponse(content)
 
+	c.logger.Info("Successfully extracted profile", "content_length", len(content))
 	return content, nil
 }
 

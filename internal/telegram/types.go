@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"interview-bot-complete/internal/storage"
+	"time"
 )
 
 // Bot представляет Telegram бота
@@ -60,7 +61,7 @@ type SendMessageResponse struct {
 	Result *Message `json:"result,omitempty"`
 }
 
-// UserSession представляет сессию пользователя
+// Обновить UserSession
 type UserSession struct {
 	UserID              int64                    `json:"user_id"`
 	InterviewID         string                   `json:"interview_id"`
@@ -70,6 +71,7 @@ type UserSession struct {
 	CurrentDialogue     []storage.QA             `json:"current_dialogue"`
 	CumulativeSummaries []string                 `json:"cumulative_summaries"`
 	Result              *storage.InterviewResult `json:"result"`
+	LastActivity        time.Time                `json:"last_activity"`
 }
 
 // SessionState представляет состояние сессии

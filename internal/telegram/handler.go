@@ -13,6 +13,71 @@ import (
 	"github.com/google/uuid"
 )
 
+type RateLimiter struct {
+	requests map[int64][]time.Time
+	mutex    sync.RWMutex
+	limit    int
+	window   time.Duration
+}
+
+func NewRateLimiter(limit int, window time.Duration) *RateLimiter {
+	return &RateLimiter{
+		requests: make(map[int64][]time.Time),
+		limit:    limit,
+		window:   window,
+	}
+}
+
+func (rl *RateLimiter) IsAllowed(userID int64) bool {
+	rl.mutex.Lock()
+	defer rl.mutex.Unlock()
+
+	now := time.Now()
+
+	// Очищаем старые запросы
+	if requests, exists := rl.requests[userID]; exists {
+		var validRequests []time.Time
+		for _, reqTime := range requests {
+			if now.Sub(reqTime) < rl.window {
+				validRequests = append(validRequests, reqTime)
+			}
+		}
+		rl.requests[userID] = validRequests
+	}
+
+	// Проверяем лимит
+	if len(rl.requests[userID]) >= rl.limit {
+		return false
+	}
+
+	// Добавляем новый запрос
+	rl.requests[userID] = append(rl.requests[userID], now)
+	return true
+}
+
+// Добавить очистку неактивных сессий
+func (h *Handler) startSessionCleanup() {
+	ticker := time.NewTicker(1 * time.Hour)
+	go func() {
+		for range ticker.C {
+			h.cleanupInactiveSessions()
+		}
+	}()
+}
+
+func (h *Handler) cleanupInactiveSessions() {
+	h.sessionsMutex.Lock()
+	defer h.sessionsMutex.Unlock()
+
+	cutoff := time.Now().Add(-24 * time.Hour) // Удаляем сессии старше 24 часов
+
+	for userID, session := range h.sessions {
+		if session.LastActivity.Before(cutoff) {
+			delete(h.sessions, userID)
+		}
+	}
+}
+
 // Handler обрабатывает сообщения от пользователей
 type Handler struct {
 	bot           *Bot
@@ -21,6 +86,7 @@ type Handler struct {
 	extractor     *extractor.Service
 	sessions      map[int64]*UserSession
 	sessionsMutex sync.RWMutex
+	rateLimiter   *RateLimiter
 }
 
 // NewHandler создает новый обработчик
@@ -31,6 +97,8 @@ func NewHandler(bot *Bot, cfg *config.Config, interviewerService *interviewer.Se
 		interviewer: interviewerService,
 		extractor:   extractorService,
 		sessions:    make(map[int64]*UserSession),
+		rateLimiter: NewRateLimiter(10, time.Minute), // 10 сообщений в минуту
+
 	}
 }
 
@@ -156,14 +224,33 @@ func (h *Handler) handleStopCommand(chatID int64, session *UserSession) {
 	h.bot.SendMessage(chatID, "🛑 Интервью остановлено.")
 }
 
-// handleUserInput обрабатывает ответы пользователя
+// Улучшенная валидация пользовательского ввода
+func (h *Handler) validateUserInput(text string) error {
+	if len(text) > 4000 {
+		return fmt.Errorf("сообщение слишком длинное (максимум 4000 символов)")
+	}
+
+	// Проверка на спам/повторяющиеся символы
+	if strings.Count(text, text[:1]) > len(text)*1 && len(text) > 10 {
+		return fmt.Errorf("сообщение содержит слишком много повторяющихся символов")
+	}
+
+	return nil
+}
+
+// Обновленный handleUserInput
 func (h *Handler) handleUserInput(chatID int64, text string, session *UserSession) {
 	if session.State != StateWaitingAnswer {
 		h.bot.SendMessage(chatID, "Сейчас не время для ответов. Используйте /start для начала интервью или /help для помощи.")
 		return
 	}
 
-	// Обрабатываем ответ пользователя
+	// Валидация ввода
+	if err := h.validateUserInput(text); err != nil {
+		h.bot.SendMessage(chatID, "❌ "+err.Error())
+		return
+	}
+
 	h.processUserAnswer(chatID, text, session)
 }
 

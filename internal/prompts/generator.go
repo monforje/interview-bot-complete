@@ -8,38 +8,15 @@ import (
 )
 
 func GenerateExtractionPrompt(schemaFields map[string]schema.SchemaField, userText string) string {
-	prompt := `Ты профессиональный экстрактор данных. Проанализируй текст пользователя и заполни профиль в формате JSON.
+	prompt := `Заполни все поля из списка profile_fields на основе текста пользователя. Если данных нет — ставь null. Верни только валидный JSON-объект с этими полями, без markdown и комментариев.
 
-СХЕМА ДАННЫХ:
+СПИСОК ПОЛЕЙ:
 %s
-
-ПРАВИЛА ЗАПОЛНЕНИЯ:
-
-1. ФИКСИРОВАННЫЕ ПОЛЯ: Извлеки только те поля, которые есть в схеме выше
-2. ТИПЫ ДАННЫХ: Строго соблюдай указанные типы (string, int, array, object)
-3. ТОЧЕЧНАЯ НОТАЦИЯ: Поля вида "location.city" создавай как вложенные объекты {"location": {"city": "значение"}}
-4. МАССИВЫ: Поля типа array создавай как массивы объектов
-5. ОБЯЗАТЕЛЬНЫЕ ПОЛЯ: Если данных нет - ставь null, НЕ ПРИДУМЫВАЙ
-6. ТЕГИ: После заполнения основных полей создай section "tags" для дополнительной информации
-
-ПРИМЕРЫ ПРАВИЛЬНЫХ СТРУКТУР:
-- education: array → "education": [{"university": "МГУ", "degree": "бакалавр", "year": 2020}]
-- skills: array → "skills": [{"name": "Go", "level": "advanced"}, {"name": "Python", "level": "intermediate"}]
-- location.city: string → "location": {"city": "Москва"}
-- social.telegram: string → "social": {"telegram": "@username"}
-- tags: object → "tags": {"hobby": "фотография", "personality": "коммуникабельный"}
-
-ВАЖНО:
-- Возвращай ТОЛЬКО валидный JSON без markdown блоков и трех обратных кавычек
-- Никаких дополнительных комментариев или объяснений
-- Для полей типа array создавай объекты с осмысленными ключами
-- Теги используй для информации, которая не поместилась в стандартные поля
-- Не дублируй информацию между основными полями и тегами
 
 ТЕКСТ ПОЛЬЗОВАТЕЛЯ:
 %s
 
-ОТВЕТ (чистый JSON без оформления, без markdown блоков и трех обратных кавычек):`
+ОТВЕТ (только JSON):`
 
 	schemaDescription := generateSchemaDescription(schemaFields)
 	return fmt.Sprintf(prompt, schemaDescription, userText)

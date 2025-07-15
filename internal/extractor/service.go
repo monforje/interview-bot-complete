@@ -16,8 +16,9 @@ import (
 
 // Service представляет сервис извлечения профилей
 type Service struct {
-	apiClient    *api.OpenAIClient
-	schemaFields map[string]schema.SchemaField
+	apiClient       *api.OpenAIClient
+	schemaFields    map[string]schema.SchemaField
+	lastProfileJSON map[string]string // interviewID → JSON
 }
 
 // ProfileResult представляет результат анализа профиля
@@ -33,10 +34,10 @@ func New(openaiAPIKey string) (*Service, error) {
 	// Создаем клиент API
 	client := api.NewOpenAIClient(openaiAPIKey)
 
-	// Загружаем схему из config/dictionary.yaml
-	yamlContent, err := ioutil.ReadFile("config/dictionary.yaml")
+	// Загружаем схему из config/profile_schema.yaml
+	yamlContent, err := ioutil.ReadFile("config/profile_schema.yaml")
 	if err != nil {
-		return nil, fmt.Errorf("error reading config/dictionary.yaml: %w", err)
+		return nil, fmt.Errorf("error reading config/profile_schema.yaml: %w", err)
 	}
 
 	// Парсим схему
@@ -48,8 +49,9 @@ func New(openaiAPIKey string) (*Service, error) {
 	log.Printf("Profile Extractor: Загружена схема с %d полями", len(schemaFields))
 
 	return &Service{
-		apiClient:    client,
-		schemaFields: schemaFields,
+		apiClient:       client,
+		schemaFields:    schemaFields,
+		lastProfileJSON: make(map[string]string),
 	}, nil
 }
 
@@ -102,6 +104,55 @@ func (s *Service) ExtractProfile(interviewResult *storage.InterviewResult) (*Pro
 		}, err
 	}
 
+	// Fallback-валидация: все profile_fields должны быть заполнены (не null)
+	missingFields := []string{}
+	for field := range s.schemaFields {
+		if v, ok := formatted[field]; !ok || v == nil {
+			missingFields = append(missingFields, field)
+		}
+	}
+
+	attempts := 0
+	for len(missingFields) > 0 && attempts < 2 {
+		log.Printf("Профиль не содержит все поля. Повторная генерация. Не хватает: %v", missingFields)
+		// Уточняющий промпт: "Заполни только недостающие поля: ..."
+		prompt := fmt.Sprintf("Заполни только недостающие поля из списка: %v. Если данных нет — ставь null. Верни только JSON.", missingFields)
+		userText := extractorInterview.ExtractContextualAnswers()
+		newJSON, err := s.apiClient.ExtractProfile(prompt + "\n\nТЕКСТ:\n" + userText)
+		if err != nil {
+			return &ProfileResult{
+				Success: false,
+				Error:   fmt.Sprintf("Ошибка повторной генерации профиля: %v", err),
+			}, err
+		}
+		var newFields map[string]interface{}
+		if err := json.Unmarshal([]byte(newJSON), &newFields); err != nil {
+			return &ProfileResult{
+				Success: false,
+				Error:   fmt.Sprintf("Ошибка парсинга повторного JSON: %v", err),
+			}, err
+		}
+		for k, v := range newFields {
+			if v != nil {
+				formatted[k] = v
+			}
+		}
+		missingFields = []string{}
+		for field := range s.schemaFields {
+			if v, ok := formatted[field]; !ok || v == nil {
+				missingFields = append(missingFields, field)
+			}
+		}
+		attempts++
+	}
+
+	if len(missingFields) > 0 {
+		return &ProfileResult{
+			Success: false,
+			Error:   fmt.Sprintf("Не удалось заполнить все поля профиля: %v", missingFields),
+		}, fmt.Errorf("не удалось заполнить все поля профиля: %v", missingFields)
+	}
+
 	// Добавляем метаданные интервью
 	metadata := extractorInterview.GetInterviewMetadata()
 	formatted["_metadata"] = map[string]interface{}{
@@ -123,13 +174,26 @@ func (s *Service) ExtractProfile(interviewResult *storage.InterviewResult) (*Pro
 		}, err
 	}
 
+	// Сохраняем под ключом interviewID
+	s.lastProfileJSON[interviewResult.InterviewID] = string(finalJSON)
+
 	log.Printf("Извлечение профиля завершено успешно для интервью: %s", interviewResult.InterviewID)
+
+	// После валидации и парсинга профиля:
+	// 1. Проверить, что все поля из s.schemaFields (profile_fields) присутствуют и не равны null.
+	// 2. Если нет — повторить генерацию с уточняющим промптом (до 2 раз).
 
 	return &ProfileResult{
 		ProfileJSON: string(finalJSON),
 		Metadata:    metadata,
 		Success:     true,
 	}, nil
+}
+
+// GetLastProfileJSON возвращает последний сохранённый профиль по ID интервью
+func (s *Service) GetLastProfileJSON(interviewID string) (string, bool) {
+	jsonData, ok := s.lastProfileJSON[interviewID]
+	return jsonData, ok
 }
 
 // SaveProfile сохраняет профиль в файл
@@ -230,11 +294,12 @@ func (s *Service) GetProfileSummary(profileJSON string) (string, error) {
 	if future, ok := profile["future"].(map[string]interface{}); ok {
 		if aspirations, ok := future["career_aspirations"].([]interface{}); ok && len(aspirations) > 0 {
 			summary += "🚀 **Карьерные цели:** "
-			for i, aspiration := range aspirations[:min(3, len(aspirations))] { // Показываем только первые 3
+			limit := min(3, len(aspirations))
+			for i := 0; i < limit; i++ {
 				if i > 0 {
 					summary += ", "
 				}
-				if aspMap, ok := aspiration.(map[string]interface{}); ok {
+				if aspMap, ok := aspirations[i].(map[string]interface{}); ok {
 					summary += fmt.Sprintf("%v", aspMap["goal"])
 				}
 			}
@@ -262,4 +327,20 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func (s *Service) InferProfileMatch(profileJSON string) (*ProfileMatch, error) {
+	prompt := prompts.GenerateProfileMatchPrompt(profileJSON)
+
+	result, err := s.apiClient.ExtractProfile(prompt)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка запроса к OpenAI: %w", err)
+	}
+
+	var match ProfileMatch
+	if err := json.Unmarshal([]byte(result), &match); err != nil {
+		return nil, fmt.Errorf("ошибка парсинга ответа: %w", err)
+	}
+
+	return &match, nil
 }

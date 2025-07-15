@@ -1,0 +1,50 @@
+{
+  "_metadata": {
+    "processing_info": {
+      "extraction_method": "contextual_answers",
+      "extraction_source": "telegram_bot",
+      "schema_version": "1.0",
+      "text_length": 5697
+    },
+    "source_interview": {
+      "completion_rate": 100,
+      "interview_id": "e2ccfb40-24c3-4ea6-b6da-60dfe8e07f24",
+      "timestamp": "2025-07-09T21:23:04+10:00",
+      "total_answers": 6,
+      "total_blocks": 1,
+      "total_questions": 6
+    }
+  },
+  "age": null,
+  "gender": null,
+  "id": null,
+  "marvel_profile.alignment": null,
+  "marvel_profile.hero_match": null,
+  "marvel_profile.hero_name": null,
+  "marvel_profile.power_type": null,
+  "marvel_profile.team_affiliation": null,
+  "name": null,
+  "preferences.decision_making": "Быстрое принятие решений",
+  "preferences.leadership_style": "Готовность к жертвам ради общего блага",
+  "preferences.work_alone_or_team": null,
+  "social.heroic_archetype": "Защитник",
+  "social.influence_type": "Влияние через изменения",
+  "social.trust_style": "Опирается на прошлый опыт и поддержку близких",
+  "summary.text": "Пользователь склонен к быстрому принятию решений в сложных ситуациях, готов к жертвам ради общего блага и придерживается принципов справедливости. В конфликтных ситуациях стремится к компромиссу, но готов отстаивать свою позицию, если дело касается принципиальных вопросов или несправедливости.",
+  "tags": {},
+  "traits.conflict_style": "Компромисс",
+  "traits.moral_compass": "Справедливость",
+  "traits.personality_core": [
+    "Способность к быстрому принятию решений",
+    "Готовность к жертвам ради общего блага"
+  ],
+  "traits.risk_tolerance": "Готовность идти против течения ради важного изменения",
+  "traits.stress_response": "Быстрое принятие решений",
+  "values.guiding_principles": [
+    "Защита близких",
+    "Правда",
+    "Справедливость"
+  ],
+  "values.motivation_core": "Защита близких",
+  "values.power_attitude": "Готовность взять на себя ответственность ради общего блага"
+}

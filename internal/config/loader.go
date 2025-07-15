@@ -48,7 +48,14 @@ func validateConfig(config *Config) error {
 			len(config.Blocks), config.InterviewConfig.TotalBlocks)
 	}
 
-	// Проверяем ID блоков
+	if len(config.ProfileFields) == 0 {
+		return fmt.Errorf("profile_fields не должны быть пустыми")
+	}
+	if len(config.ProfileFields) > 100 {
+		return fmt.Errorf("profile_fields не должны превышать 100 элементов")
+	}
+
+	// Проверяем ID блоков и вопросы
 	for i, block := range config.Blocks {
 		expectedID := i + 1
 		if block.ID != expectedID {
@@ -66,6 +73,10 @@ func validateConfig(config *Config) error {
 
 		if block.ContextPrompt == "" {
 			return fmt.Errorf("блок %d должен иметь context_prompt", block.ID)
+		}
+
+		if len(block.Questions) != config.InterviewConfig.QuestionsPerBlock {
+			return fmt.Errorf("блок %d должен содержать %d вопросов, найдено %d", block.ID, config.InterviewConfig.QuestionsPerBlock, len(block.Questions))
 		}
 	}
 

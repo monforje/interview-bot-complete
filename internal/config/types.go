@@ -4,6 +4,7 @@ package config
 type Config struct {
 	InterviewConfig  InterviewConfig  `yaml:"interview_config"`
 	Blocks           []Block          `yaml:"blocks"`
+	ProfileFields    []string         `yaml:"profile_fields"`
 	SummaryStructure SummaryStructure `yaml:"summary_structure"`
 }
 
@@ -21,6 +22,7 @@ type Block struct {
 	Title         string   `yaml:"title"`
 	ContextPrompt string   `yaml:"context_prompt"`
 	FocusAreas    []string `yaml:"focus_areas"`
+	Questions     []string `yaml:"questions"`
 }
 
 // SummaryStructure определяет структуру саммари

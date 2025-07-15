@@ -1,0 +1,49 @@
+{
+  "_metadata": {
+    "processing_info": {
+      "extraction_method": "contextual_answers",
+      "extraction_source": "telegram_bot",
+      "schema_version": "1.0",
+      "text_length": 3506
+    },
+    "source_interview": {
+      "completion_rate": 100,
+      "interview_id": "18ed7213-e38e-4adf-97fa-9932b7cd59a4",
+      "timestamp": "2025-07-09T21:47:42+10:00",
+      "total_answers": 3,
+      "total_blocks": 1,
+      "total_questions": 3
+    }
+  },
+  "age": null,
+  "gender": null,
+  "id": null,
+  "marvel_profile.alignment": "good",
+  "marvel_profile.hero_match": null,
+  "marvel_profile.hero_name": null,
+  "marvel_profile.power_type": null,
+  "marvel_profile.team_affiliation": null,
+  "name": null,
+  "preferences.decision_making": "intuitive",
+  "preferences.leadership_style": null,
+  "preferences.work_alone_or_team": null,
+  "social.heroic_archetype": "self-sacrificing",
+  "social.influence_type": null,
+  "social.trust_style": "internal",
+  "summary.text": null,
+  "tags": {},
+  "traits.conflict_style": "compromise",
+  "traits.moral_compass": "empathetic",
+  "traits.personality_core": [
+    "empathetic",
+    "responsible"
+  ],
+  "traits.risk_tolerance": "moderate",
+  "traits.stress_response": "calm under pressure",
+  "values.guiding_principles": [
+    "honesty",
+    "responsibility"
+  ],
+  "values.motivation_core": "helping others",
+  "values.power_attitude": "self-sacrificing"
+}

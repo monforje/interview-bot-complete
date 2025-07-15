@@ -35,28 +35,24 @@ func (rl *RateLimiter) IsAllowed(userID int64) bool {
 
 	now := time.Now()
 
-	// Очищаем старые запросы
 	if requests, exists := rl.requests[userID]; exists {
-		var validRequests []time.Time
-		for _, reqTime := range requests {
-			if now.Sub(reqTime) < rl.window {
-				validRequests = append(validRequests, reqTime)
+		var valid []time.Time
+		for _, t := range requests {
+			if now.Sub(t) < rl.window {
+				valid = append(valid, t)
 			}
 		}
-		rl.requests[userID] = validRequests
+		rl.requests[userID] = valid
 	}
 
-	// Проверяем лимит
 	if len(rl.requests[userID]) >= rl.limit {
 		return false
 	}
 
-	// Добавляем новый запрос
 	rl.requests[userID] = append(rl.requests[userID], now)
 	return true
 }
 
-// Handler обрабатывает сообщения от пользователей
 type Handler struct {
 	bot           *Bot
 	config        *config.Config
@@ -67,24 +63,19 @@ type Handler struct {
 	rateLimiter   *RateLimiter
 }
 
-// NewHandler создает новый обработчик
 func NewHandler(bot *Bot, cfg *config.Config, interviewerService *interviewer.Service, extractorService *extractor.Service) *Handler {
-	handler := &Handler{
+	h := &Handler{
 		bot:         bot,
 		config:      cfg,
 		interviewer: interviewerService,
 		extractor:   extractorService,
 		sessions:    make(map[int64]*UserSession),
-		rateLimiter: NewRateLimiter(10, time.Minute), // 10 сообщений в минуту
+		rateLimiter: NewRateLimiter(10, time.Minute),
 	}
-
-	// Запускаем очистку сессий
-	handler.startSessionCleanup()
-
-	return handler
+	h.startSessionCleanup()
+	return h
 }
 
-// Добавить очистку неактивных сессий
 func (h *Handler) startSessionCleanup() {
 	ticker := time.NewTicker(1 * time.Hour)
 	go func() {
@@ -98,42 +89,122 @@ func (h *Handler) cleanupInactiveSessions() {
 	h.sessionsMutex.Lock()
 	defer h.sessionsMutex.Unlock()
 
-	cutoff := time.Now().Add(-24 * time.Hour) // Удаляем сессии старше 24 часов
-
-	for userID, session := range h.sessions {
-		if session.LastActivity.Before(cutoff) {
-			delete(h.sessions, userID)
+	cutoff := time.Now().Add(-24 * time.Hour)
+	for uid, sess := range h.sessions {
+		if sess.LastActivity.Before(cutoff) {
+			delete(h.sessions, uid)
 		}
 	}
 }
 
-// HandleUpdate обрабатывает обновление от Telegram
 func (h *Handler) HandleUpdate(update Update) {
 	if update.Message == nil || update.Message.From == nil {
 		return
 	}
-
 	userID := update.Message.From.ID
 	chatID := update.Message.Chat.ID
 	text := strings.TrimSpace(update.Message.Text)
 
-	// Проверяем rate limit
 	if !h.rateLimiter.IsAllowed(userID) {
 		h.bot.SendMessage(chatID, "⏳ Слишком много сообщений. Пожалуйста, подождите минуту.")
 		return
 	}
 
-	// Получаем или создаем сессию пользователя
 	session := h.getOrCreateSession(userID)
 
-	// Обрабатываем команды
 	if strings.HasPrefix(text, "/") {
 		h.handleCommand(chatID, text, session)
 		return
 	}
-
-	// Обрабатываем ответы пользователя
 	h.handleUserInput(chatID, text, session)
+}
+
+func (h *Handler) completeInterview(chatID int64, session *UserSession) {
+	if err := storage.SaveResult(session.Result); err != nil {
+		h.bot.SendMessage(chatID, "Ошибка сохранения результата интервью.")
+		return
+	}
+	session.State = StateCompleted
+
+	h.bot.SendMessage(chatID, "🎉 Интервью завершено! Начинаю анализ вашего психологического профиля...")
+	if h.extractor != nil {
+		go h.processProfileExtraction(chatID, session)
+	}
+
+	completionText := fmt.Sprintf(`✅ *Интервью успешно завершено!*
+📊 Собрано данных:
+• %d блоков пройдено
+• %d ответов получено
+• 🆔 ID: `+"`%s`"+`
+
+🧠 Анализ профиля в процессе...
+Результат будет готов через 1-2 минуты.
+
+Используйте /start для нового интервью.`,
+		len(session.Result.Blocks),
+		h.getTotalAnswersCount(session.Result),
+		session.InterviewID,
+	)
+	h.bot.SendMessage(chatID, completionText)
+}
+
+func (h *Handler) processProfileExtraction(chatID int64, session *UserSession) {
+	profileResult, err := h.extractor.ExtractProfile(session.Result)
+	if err != nil {
+		h.bot.SendMessage(chatID, "❌ Ошибка при анализе профиля: "+err.Error())
+		return
+	}
+	if !profileResult.Success {
+		h.bot.SendMessage(chatID, "❌ Не удалось проанализировать профиль: "+profileResult.Error)
+		return
+	}
+
+	fileName, err := h.extractor.SaveProfile(session.InterviewID, profileResult)
+	if err != nil {
+		h.bot.SendMessage(chatID, "⚠️ Профиль создан, но не удалось сохранить файл: "+err.Error())
+	}
+
+	// **Новый блок**: выводим описание Marvel-героя
+	if rawJSON, ok := h.extractor.GetLastProfileJSON(session.InterviewID); ok {
+		if prof, err := extractor.ParseProfileMatch([]byte(rawJSON)); err == nil {
+			h.bot.SendMessage(chatID, extractor.GenerateProfileDescription(prof))
+		}
+	}
+
+	// Дальше — уже общее резюме
+	summary, err := h.extractor.GetProfileSummary(profileResult.ProfileJSON)
+	if err != nil {
+		summary = "Профиль создан, но не удалось сгенерировать резюме."
+	}
+	resultMessage := fmt.Sprintf(`🎯 *Анализ профиля завершен!*
+
+%s
+
+💾 Полный профиль сохранен в: `+"`%s`"+`
+
+🔍 Профиль содержит детальный анализ:
+• Семейные паттерны и влияния
+• Ценностные ориентации  
+• Карьерные мотивации
+• Способы преодоления трудностей
+• Планы на будущее
+
+_Этот анализ создан искусственным интеллектом на основе ваших ответов._`,
+		summary, fileName,
+	)
+	h.bot.SendMessage(chatID, resultMessage)
+
+	h.sendJSONProfile(chatID, profileResult.ProfileJSON, session.InterviewID)
+
+	if rawJSON, ok := h.extractor.GetLastProfileJSON(session.InterviewID); ok {
+		hero, err := h.extractor.InferProfileMatch(rawJSON)
+		if err == nil {
+			msg := extractor.GenerateProfileDescription(hero)
+			h.bot.SendMessage(chatID, msg)
+		} else {
+			h.bot.SendMessage(chatID, "⚠️ Не удалось определить супергероя: "+err.Error())
+		}
+	}
 }
 
 // handleCommand обрабатывает команды бота
@@ -401,22 +472,14 @@ func (h *Handler) processUserAnswer(chatID int64, answer string, session *UserSe
 
 // generateNextQuestion генерирует следующий вопрос
 func (h *Handler) generateNextQuestion(chatID int64, session *UserSession) {
-	h.bot.SendMessage(chatID, "🤔 Генерирую следующий вопрос...")
-
 	block := h.config.Blocks[session.CurrentBlock-1]
 
-	// Вызываем интервьюера для получения следующего вопроса
-	question, err := h.interviewer.GenerateQuestion(block, session.CurrentDialogue, session.CumulativeSummaries, h.config)
-	if err != nil {
-		h.bot.SendMessage(chatID, "Произошла ошибка при генерации вопроса. Попробуйте еще раз.")
-		return
-	}
-
-	// Проверяем, завершает ли AI блок
-	if h.isBlockComplete(question) {
+	if session.QuestionCount >= len(block.Questions) {
 		h.finishCurrentBlock(chatID, session)
 		return
 	}
+
+	question := block.Questions[session.QuestionCount]
 
 	// Добавляем вопрос в диалог
 	session.CurrentDialogue = append(session.CurrentDialogue, storage.QA{
@@ -479,92 +542,6 @@ func (h *Handler) finishCurrentBlock(chatID int64, session *UserSession) {
 	// Переходим к следующему блоку
 	session.CurrentBlock++
 	h.startNextBlock(chatID, session)
-}
-
-// completeInterview завершает интервью
-func (h *Handler) completeInterview(chatID int64, session *UserSession) {
-	// Сохраняем результат интервью
-	err := storage.SaveResult(session.Result)
-	if err != nil {
-		h.bot.SendMessage(chatID, "Ошибка сохранения результата интервью.")
-		return
-	}
-
-	session.State = StateCompleted
-
-	// Начинаем анализ профиля
-	h.bot.SendMessage(chatID, "🎉 Интервью завершено! Начинаю анализ вашего психологического профиля...")
-
-	// Извлекаем профиль с помощью Profile Extractor
-	if h.extractor != nil {
-		go h.processProfileExtraction(chatID, session)
-	}
-
-	completionText := fmt.Sprintf(`✅ *Интервью успешно завершено!*
-
-📊 Собрано данных:
-• %d блоков пройдено
-• %d ответов получено
-• 🆔 ID: `+"`%s`"+`
-
-🧠 Анализ профиля в процессе...
-Результат будет готов через 1-2 минуты.
-
-Используйте /start для нового интервью.`,
-		len(session.Result.Blocks),
-		h.getTotalAnswersCount(session.Result),
-		session.InterviewID)
-
-	h.bot.SendMessage(chatID, completionText)
-}
-
-// processProfileExtraction обрабатывает извлечение профиля в отдельной горутине
-func (h *Handler) processProfileExtraction(chatID int64, session *UserSession) {
-	profileResult, err := h.extractor.ExtractProfile(session.Result)
-	if err != nil {
-		h.bot.SendMessage(chatID, "❌ Ошибка при анализе профиля: "+err.Error())
-		return
-	}
-
-	if !profileResult.Success {
-		h.bot.SendMessage(chatID, "❌ Не удалось проанализировать профиль: "+profileResult.Error)
-		return
-	}
-
-	// Сохраняем профиль в файл
-	fileName, err := h.extractor.SaveProfile(session.InterviewID, profileResult)
-	if err != nil {
-		h.bot.SendMessage(chatID, "⚠️ Профиль создан, но не удалось сохранить файл: "+err.Error())
-	}
-
-	// Получаем краткое резюме для Telegram
-	summary, err := h.extractor.GetProfileSummary(profileResult.ProfileJSON)
-	if err != nil {
-		summary = "Профиль создан, но не удалось сгенерировать резюме."
-	}
-
-	// Отправляем резюме профиля
-	resultMessage := fmt.Sprintf(`🎯 *Анализ профиля завершен!*
-
-%s
-
-💾 Полный профиль сохранен в: `+"`%s`"+`
-
-🔍 Профиль содержит детальный анализ:
-• Семейные паттерны и влияния
-• Ценностные ориентации  
-• Карьерные мотивации
-• Способы преодоления трудностей
-• Планы на будущее
-
-_Этот анализ создан искусственным интеллектом на основе ваших ответов._`,
-		summary,
-		fileName)
-
-	h.bot.SendMessage(chatID, resultMessage)
-
-	// Отправляем JSON профиль отдельным сообщением
-	h.sendJSONProfile(chatID, profileResult.ProfileJSON, session.InterviewID)
 }
 
 // sendJSONProfile отправляет JSON профиль

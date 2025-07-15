@@ -33,7 +33,7 @@ func main() {
 	}
 
 	// Загружаем конфигурацию интервью
-	cfg, err := config.Load("config_test.yaml")
+	cfg, err := config.Load("config/interview.yaml")
 	if err != nil {
 		log.Fatalf("Ошибка загрузки конфигурации интервью: %v", err)
 	}

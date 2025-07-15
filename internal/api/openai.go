@@ -7,18 +7,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
 
 type OpenAIClient struct {
-	apiKey string
-	client *http.Client
-	logger *slog.Logger
+	apiKey      string
+	model       string
+	maxTokens   int
+	temperature float64
+	client      *http.Client
+	logger      *slog.Logger
 }
 
 type OpenAIRequest struct {
@@ -62,6 +65,11 @@ type APIError struct {
 }
 
 func NewOpenAIClient(apiKey string) *OpenAIClient {
+	// Читаем настройки из переменных окружения
+	model := getEnvOrDefault("OPENAI_MODEL", "gpt-4.1-mini")
+	maxTokens := getEnvAsIntOrDefault("OPENAI_MAX_TOKENS", 4000)
+	temperature := getEnvAsFloatOrDefault("OPENAI_TEMPERATURE", 0.1)
+
 	// Настройка транспорта для лучшей производительности
 	transport := &http.Transport{
 		MaxIdleConns:        100,
@@ -79,7 +87,10 @@ func NewOpenAIClient(apiKey string) *OpenAIClient {
 	}
 
 	return &OpenAIClient{
-		apiKey: apiKey,
+		apiKey:      apiKey,
+		model:       model,
+		maxTokens:   maxTokens,
+		temperature: temperature,
 		client: &http.Client{
 			Timeout:   120 * time.Second,
 			Transport: transport,
@@ -88,31 +99,21 @@ func NewOpenAIClient(apiKey string) *OpenAIClient {
 	}
 }
 
-// NewOpenAIClientWithConfig создает клиент с расширенной конфигурацией
-func NewOpenAIClientWithConfig(apiKey, model string, maxTokens int, temperature float64) *OpenAIClient {
-	client := &OpenAIClient{
-		apiKey: apiKey,
-		client: &http.Client{
-			Timeout: 120 * time.Second,
-		},
-	}
-	return client
-}
-
+// ExtractProfile - единственный метод для работы с профилями
 func (c *OpenAIClient) ExtractProfile(prompt string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
 	reqBody := OpenAIRequest{
-		Model: "gpt-4", // Обновить на более стабильную модель
+		Model: c.model,
 		Messages: []Message{
 			{
 				Role:    "user",
 				Content: prompt,
 			},
 		},
-		Temperature: 0.1,
-		MaxTokens:   4000,
+		Temperature: c.temperature,
+		MaxTokens:   c.maxTokens,
 	}
 
 	jsonBody, err := json.Marshal(reqBody)
@@ -167,6 +168,14 @@ func (c *OpenAIClient) ExtractProfile(prompt string) (string, error) {
 	content := openAIResp.Choices[0].Message.Content
 	content = cleanJSONResponse(content)
 
+	// Логируем использование токенов
+	if openAIResp.Usage.TotalTokens > 0 {
+		c.logger.Info("Token usage",
+			"prompt_tokens", openAIResp.Usage.PromptTokens,
+			"completion_tokens", openAIResp.Usage.CompletionTokens,
+			"total_tokens", openAIResp.Usage.TotalTokens)
+	}
+
 	c.logger.Info("Successfully extracted profile", "content_length", len(content))
 	return content, nil
 }
@@ -183,34 +192,42 @@ func cleanJSONResponse(response string) string {
 	return response
 }
 
-// GetUsageStats возвращает статистику использования токенов (доступно только в OpenAI)
-func (c *OpenAIClient) GetUsageStats(prompt string) (*Usage, error) {
-	reqBody := OpenAIRequest{
-		Model: "gpt-4.1-mini",
-		Messages: []Message{
-			{
-				Role:    "user",
-				Content: prompt,
-			},
-		},
-		Temperature: 0.1,
-		MaxTokens:   4000,
+// Helper функции для работы с переменными окружения
+func getEnvOrDefault(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
 	}
+	return defaultValue
+}
 
-	jsonBody, _ := json.Marshal(reqBody)
-	req, _ := http.NewRequest("POST", "https://api.openai.com/v1/chat/completions", bytes.NewBuffer(jsonBody))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return nil, err
+func getEnvAsIntOrDefault(key string, defaultValue int) int {
+	if value := os.Getenv(key); value != "" {
+		if intValue, err := parseIntSafe(value); err == nil {
+			return intValue
+		}
 	}
-	defer resp.Body.Close()
+	return defaultValue
+}
 
-	body, _ := ioutil.ReadAll(resp.Body)
-	var openAIResp OpenAIResponse
-	json.Unmarshal(body, &openAIResp)
+func getEnvAsFloatOrDefault(key string, defaultValue float64) float64 {
+	if value := os.Getenv(key); value != "" {
+		if floatValue, err := parseFloatSafe(value); err == nil {
+			return floatValue
+		}
+	}
+	return defaultValue
+}
 
-	return &openAIResp.Usage, nil
+func parseIntSafe(s string) (int, error) {
+	// Простая реализация без импорта strconv для избежания конфликтов
+	var result int
+	_, err := fmt.Sscanf(s, "%d", &result)
+	return result, err
+}
+
+func parseFloatSafe(s string) (float64, error) {
+	// Простая реализация без импорта strconv для избежания конфликтов
+	var result float64
+	_, err := fmt.Sscanf(s, "%f", &result)
+	return result, err
 }

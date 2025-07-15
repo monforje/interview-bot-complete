@@ -12,13 +12,13 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"time"
 )
 
 // Service представляет сервис извлечения профилей
 type Service struct {
-	apiClient       *api.OpenAIClient
-	schemaFields    map[string]schema.SchemaField
-	lastProfileJSON map[string]string // interviewID → JSON
+	apiClient    *api.OpenAIClient
+	schemaFields map[string]schema.SchemaField
 }
 
 // ProfileResult представляет результат анализа профиля
@@ -49,13 +49,12 @@ func New(openaiAPIKey string) (*Service, error) {
 	log.Printf("Profile Extractor: Загружена схема с %d полями", len(schemaFields))
 
 	return &Service{
-		apiClient:       client,
-		schemaFields:    schemaFields,
-		lastProfileJSON: make(map[string]string),
+		apiClient:    client,
+		schemaFields: schemaFields,
 	}, nil
 }
 
-// ExtractProfile извлекает психологический профиль из результата интервью
+// ExtractProfile извлекает профиль из результата интервью (оптимизированно - один запрос)
 func (s *Service) ExtractProfile(interviewResult *storage.InterviewResult) (*ProfileResult, error) {
 	log.Printf("Начинаю извлечение профиля для интервью: %s", interviewResult.InterviewID)
 
@@ -66,11 +65,11 @@ func (s *Service) ExtractProfile(interviewResult *storage.InterviewResult) (*Pro
 	userText := extractorInterview.ExtractContextualAnswers()
 	log.Printf("Извлечено текста: %d символов", len(userText))
 
-	// Этап 1: Извлечение данных
-	log.Println("Этап 1: Извлечение данных профиля...")
-	extractionPrompt := prompts.GenerateExtractionPrompt(s.schemaFields, userText)
+	// ЕДИНСТВЕННЫЙ запрос к API - извлечение и валидация в одном промпте
+	log.Println("Извлечение профиля (оптимизированно)...")
+	optimizedPrompt := prompts.GenerateOptimizedExtractionPrompt(s.schemaFields, userText)
 
-	profileJSON, err := s.apiClient.ExtractProfile(extractionPrompt)
+	profileJSON, err := s.apiClient.ExtractProfile(optimizedPrompt)
 	if err != nil {
 		return &ProfileResult{
 			Success: false,
@@ -78,91 +77,30 @@ func (s *Service) ExtractProfile(interviewResult *storage.InterviewResult) (*Pro
 		}, err
 	}
 
-	// Этап 2: Валидация и очистка
-	log.Println("Этап 2: Валидация и очистка профиля...")
-	validationPrompt := prompts.GenerateValidationPrompt(profileJSON)
-
-	validatedJSON, err := s.apiClient.ExtractProfile(validationPrompt)
-	if err != nil {
-		return &ProfileResult{
-			Success: false,
-			Error:   fmt.Sprintf("Ошибка валидации профиля: %v", err),
-		}, err
-	}
-
-	// Финальная проверка структуры
-	if err := validator.ValidateProfileJSON(validatedJSON, s.schemaFields); err != nil {
+	// Быстрая проверка структуры без дополнительных запросов
+	if err := validator.ValidateProfileJSON(profileJSON, s.schemaFields); err != nil {
 		log.Printf("Предупреждение валидации: %v", err)
 	}
 
-	// Форматирование и добавление метаданных
+	// Парсим JSON для проверки
 	var formatted map[string]interface{}
-	if err := json.Unmarshal([]byte(validatedJSON), &formatted); err != nil {
+	if err := json.Unmarshal([]byte(profileJSON), &formatted); err != nil {
 		return &ProfileResult{
 			Success: false,
-			Error:   fmt.Sprintf("Ошибка парсинга финального JSON: %v", err),
+			Error:   fmt.Sprintf("Ошибка парсинга JSON: %v", err),
 		}, err
 	}
 
-	// Fallback-валидация: все profile_fields должны быть заполнены (не null)
-	missingFields := []string{}
-	for field := range s.schemaFields {
-		if v, ok := formatted[field]; !ok || v == nil {
-			missingFields = append(missingFields, field)
-		}
-	}
-
-	attempts := 0
-	for len(missingFields) > 0 && attempts < 2 {
-		log.Printf("Профиль не содержит все поля. Повторная генерация. Не хватает: %v", missingFields)
-		// Уточняющий промпт: "Заполни только недостающие поля: ..."
-		prompt := fmt.Sprintf("Заполни только недостающие поля из списка: %v. Если данных нет — ставь null. Верни только JSON.", missingFields)
-		userText := extractorInterview.ExtractContextualAnswers()
-		newJSON, err := s.apiClient.ExtractProfile(prompt + "\n\nТЕКСТ:\n" + userText)
-		if err != nil {
-			return &ProfileResult{
-				Success: false,
-				Error:   fmt.Sprintf("Ошибка повторной генерации профиля: %v", err),
-			}, err
-		}
-		var newFields map[string]interface{}
-		if err := json.Unmarshal([]byte(newJSON), &newFields); err != nil {
-			return &ProfileResult{
-				Success: false,
-				Error:   fmt.Sprintf("Ошибка парсинга повторного JSON: %v", err),
-			}, err
-		}
-		for k, v := range newFields {
-			if v != nil {
-				formatted[k] = v
-			}
-		}
-		missingFields = []string{}
-		for field := range s.schemaFields {
-			if v, ok := formatted[field]; !ok || v == nil {
-				missingFields = append(missingFields, field)
-			}
-		}
-		attempts++
-	}
-
-	if len(missingFields) > 0 {
-		return &ProfileResult{
-			Success: false,
-			Error:   fmt.Sprintf("Не удалось заполнить все поля профиля: %v", missingFields),
-		}, fmt.Errorf("не удалось заполнить все поля профиля: %v", missingFields)
-	}
-
-	// Добавляем метаданные интервью
+	// Добавляем минимальные метаданные
+	extractorInterview = s.convertToExtractorFormat(interviewResult)
 	metadata := extractorInterview.GetInterviewMetadata()
+
+	// Только важные метаданные
 	formatted["_metadata"] = map[string]interface{}{
-		"source_interview": metadata,
-		"processing_info": map[string]interface{}{
-			"schema_version":    "1.0",
-			"extraction_method": "contextual_answers",
-			"text_length":       len(userText),
-			"extraction_source": "telegram_bot",
-		},
+		"interview_id":    interviewResult.InterviewID,
+		"creation_date":   time.Now().Format("2006-01-02 15:04:05"),
+		"total_questions": metadata["total_questions"],
+		"completion_rate": metadata["completion_rate"],
 	}
 
 	// Конвертируем обратно в JSON строку
@@ -174,26 +112,13 @@ func (s *Service) ExtractProfile(interviewResult *storage.InterviewResult) (*Pro
 		}, err
 	}
 
-	// Сохраняем под ключом interviewID
-	s.lastProfileJSON[interviewResult.InterviewID] = string(finalJSON)
-
 	log.Printf("Извлечение профиля завершено успешно для интервью: %s", interviewResult.InterviewID)
-
-	// После валидации и парсинга профиля:
-	// 1. Проверить, что все поля из s.schemaFields (profile_fields) присутствуют и не равны null.
-	// 2. Если нет — повторить генерацию с уточняющим промптом (до 2 раз).
 
 	return &ProfileResult{
 		ProfileJSON: string(finalJSON),
 		Metadata:    metadata,
 		Success:     true,
 	}, nil
-}
-
-// GetLastProfileJSON возвращает последний сохранённый профиль по ID интервью
-func (s *Service) GetLastProfileJSON(interviewID string) (string, bool) {
-	jsonData, ok := s.lastProfileJSON[interviewID]
-	return jsonData, ok
 }
 
 // SaveProfile сохраняет профиль в файл
@@ -251,96 +176,50 @@ func (s *Service) GetProfileSummary(profileJSON string) (string, error) {
 
 	summary := "📊 **Краткое резюме профиля:**\n\n"
 
-	// Извлекаем ключевые данные
-	if values, ok := profile["values"].(map[string]interface{}); ok {
-		if coreBeliefs, ok := values["core_beliefs"].([]interface{}); ok && len(coreBeliefs) > 0 {
-			summary += "🎯 **Ценности:** "
-			for i, belief := range coreBeliefs {
-				if i > 0 {
-					summary += ", "
-				}
-				summary += fmt.Sprintf("%v", belief)
-			}
-			summary += "\n\n"
-		}
+	// Извлекаем ключевые данные из нового формата
+	if name, ok := profile["name"].(string); ok && name != "" {
+		summary += fmt.Sprintf("👤 **Имя:** %s\n", name)
 	}
 
-	if personality, ok := profile["personality"].(map[string]interface{}); ok {
-		if strengths, ok := personality["strengths"].([]interface{}); ok && len(strengths) > 0 {
-			summary += "💪 **Сильные стороны:** "
-			for i, strength := range strengths {
-				if i > 0 {
-					summary += ", "
-				}
-				summary += fmt.Sprintf("%v", strength)
-			}
-			summary += "\n\n"
-		}
+	if university, ok := profile["university"].(string); ok && university != "" {
+		summary += fmt.Sprintf("🎓 **Университет:** %s\n", university)
 	}
 
-	if career, ok := profile["career"].(map[string]interface{}); ok {
-		if workValues, ok := career["work_values"].([]interface{}); ok && len(workValues) > 0 {
-			summary += "🏢 **Рабочие ценности:** "
-			for i, value := range workValues {
-				if i > 0 {
-					summary += ", "
-				}
-				summary += fmt.Sprintf("%v", value)
-			}
-			summary += "\n\n"
-		}
+	if position, ok := profile["current_position"].(string); ok && position != "" {
+		summary += fmt.Sprintf("💼 **Позиция:** %s\n", position)
 	}
 
-	if future, ok := profile["future"].(map[string]interface{}); ok {
-		if aspirations, ok := future["career_aspirations"].([]interface{}); ok && len(aspirations) > 0 {
-			summary += "🚀 **Карьерные цели:** "
-			limit := min(3, len(aspirations))
-			for i := 0; i < limit; i++ {
-				if i > 0 {
-					summary += ", "
-				}
-				if aspMap, ok := aspirations[i].(map[string]interface{}); ok {
-					summary += fmt.Sprintf("%v", aspMap["goal"])
-				}
+	if hobbies, ok := profile["hobbies"].([]interface{}); ok && len(hobbies) > 0 {
+		summary += "🎯 **Хобби:** "
+		for i, hobby := range hobbies {
+			if i > 0 && i < 3 {
+				summary += ", "
 			}
-			summary += "\n\n"
+			if i >= 3 {
+				summary += "..."
+				break
+			}
+			summary += fmt.Sprintf("%v", hobby)
 		}
+		summary += "\n"
 	}
 
-	// Добавляем метаинформацию
-	if metadata, ok := profile["_metadata"].(map[string]interface{}); ok {
-		if sourceInterview, ok := metadata["source_interview"].(map[string]interface{}); ok {
-			if completionRate, ok := sourceInterview["completion_rate"].(float64); ok {
-				summary += fmt.Sprintf("📈 **Полнота интервью:** %.1f%%\n", completionRate)
+	if skills, ok := profile["hard_skills"].([]interface{}); ok && len(skills) > 0 {
+		summary += "💪 **Навыки:** "
+		for i, skill := range skills {
+			if i > 0 && i < 3 {
+				summary += ", "
 			}
+			if i >= 3 {
+				summary += "..."
+				break
+			}
+			summary += fmt.Sprintf("%v", skill)
 		}
+		summary += "\n"
 	}
 
-	summary += "\n_Это автоматически сгенерированный анализ на основе ваших ответов в интервью._"
+	summary += "\n_Полный профиль сохранен в JSON файле._"
 
 	return summary, nil
-}
-
-// min helper function
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func (s *Service) InferProfileMatch(profileJSON string) (*ProfileMatch, error) {
-	prompt := prompts.GenerateProfileMatchPrompt(profileJSON)
-
-	result, err := s.apiClient.ExtractProfile(prompt)
-	if err != nil {
-		return nil, fmt.Errorf("ошибка запроса к OpenAI: %w", err)
-	}
-
-	var match ProfileMatch
-	if err := json.Unmarshal([]byte(result), &match); err != nil {
-		return nil, fmt.Errorf("ошибка парсинга ответа: %w", err)
-	}
-
-	return &match, nil
 }

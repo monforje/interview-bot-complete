@@ -126,7 +126,7 @@ func (h *Handler) completeInterview(chatID int64, session *UserSession) {
 	}
 	session.State = StateCompleted
 
-	h.bot.SendMessage(chatID, "🎉 Интервью завершено! Начинаю анализ вашего психологического профиля...")
+	h.bot.SendMessage(chatID, "🎉 Интервью завершено! Начинаю анализ вашего профиля...")
 	if h.extractor != nil {
 		go h.processProfileExtraction(chatID, session)
 	}
@@ -162,49 +162,35 @@ func (h *Handler) processProfileExtraction(chatID int64, session *UserSession) {
 	fileName, err := h.extractor.SaveProfile(session.InterviewID, profileResult)
 	if err != nil {
 		h.bot.SendMessage(chatID, "⚠️ Профиль создан, но не удалось сохранить файл: "+err.Error())
+		return
 	}
 
-	// **Новый блок**: выводим описание Marvel-героя
-	if rawJSON, ok := h.extractor.GetLastProfileJSON(session.InterviewID); ok {
-		if prof, err := extractor.ParseProfileMatch([]byte(rawJSON)); err == nil {
-			h.bot.SendMessage(chatID, extractor.GenerateProfileDescription(prof))
-		}
-	}
-
-	// Дальше — уже общее резюме
+	// Отправляем краткое резюме
 	summary, err := h.extractor.GetProfileSummary(profileResult.ProfileJSON)
 	if err != nil {
 		summary = "Профиль создан, но не удалось сгенерировать резюме."
 	}
+
 	resultMessage := fmt.Sprintf(`🎯 *Анализ профиля завершен!*
 
 %s
 
-💾 Полный профиль сохранен в: `+"`%s`"+`
+💾 Профиль сохранен в файл
 
-🔍 Профиль содержит детальный анализ:
-• Семейные паттерны и влияния
-• Ценностные ориентации  
-• Карьерные мотивации
-• Способы преодоления трудностей
-• Планы на будущее
+🔍 Профиль содержит детальную информацию:
+• Личные данные и контакты
+• Образование и карьера
+• Навыки и компетенции
+• Интересы и хобби
+• Цели и планы
 
 _Этот анализ создан искусственным интеллектом на основе ваших ответов._`,
-		summary, fileName,
+		summary,
 	)
 	h.bot.SendMessage(chatID, resultMessage)
 
-	h.sendJSONProfile(chatID, profileResult.ProfileJSON, session.InterviewID)
-
-	if rawJSON, ok := h.extractor.GetLastProfileJSON(session.InterviewID); ok {
-		hero, err := h.extractor.InferProfileMatch(rawJSON)
-		if err == nil {
-			msg := extractor.GenerateProfileDescription(hero)
-			h.bot.SendMessage(chatID, msg)
-		} else {
-			h.bot.SendMessage(chatID, "⚠️ Не удалось определить супергероя: "+err.Error())
-		}
-	}
+	// Отправляем JSON файл
+	h.sendJSONFile(chatID, fileName, session.InterviewID)
 }
 
 // handleCommand обрабатывает команды бота
@@ -249,7 +235,7 @@ func (h *Handler) handleHelpCommand(chatID int64) {
 /status - Проверить прогресс текущего интервью
 /restart - Перезапустить интервью
 /stop - Остановить текущее интервью
-/getprofile - Получить полный JSON профиль (после завершения)
+/getprofile - Получить JSON файл профиля (после завершения)
 /getsummary - Получить краткое резюме профиля (после завершения)
 /help - Показать это сообщение
 
@@ -258,21 +244,20 @@ func (h *Handler) handleHelpCommand(chatID int64) {
 2. Отвечайте на вопросы максимально честно и подробно
 3. Интервью состоит из %d блоков
 4. В каждом блоке до %d вопросов
-5. После завершения создается психологический профиль
+5. После завершения создается профиль в формате JSON
 
 *🧠 Анализ профиля:*
 • Автоматический анализ ваших ответов
-• Выявление ценностей и мотиваций
-• Анализ семейных паттернов
-• Карьерные ориентации
-• Способы преодоления трудностей
+• Структурированный профиль в JSON формате
+• Данные о навыках, образовании, целях
+• Готов для использования в системе Viget
 
 *📄 Получение результатов:*
-• После завершения интервью профиль отправляется автоматически
-• Используйте /getprofile для повторного получения JSON
+• После завершения интервью профиль отправляется как JSON файл
+• Используйте /getprofile для повторного получения файла
 • Используйте /getsummary для краткого резюме
 
-*Совет:* Чем подробнее ваши ответы, тем точнее будет анализ!`
+*Совет:* Чем подробнее ваши ответы, тем точнее будет профиль!`
 
 	maxQuestions := h.config.GetQuestionsPerBlock() + h.config.GetMaxFollowupQuestions()
 	h.bot.SendFormattedMessage(chatID, helpText, h.config.GetTotalBlocks(), maxQuestions)
@@ -296,7 +281,7 @@ func (h *Handler) handleStatusCommand(chatID int64, session *UserSession) {
 			h.getStateDescription(session.State))
 		h.bot.SendMessage(chatID, progress)
 	case StateCompleted:
-		h.bot.SendFormattedMessage(chatID, "✅ Интервью завершено!\n🆔 ID: `%s`\n\n_Используйте /getprofile для получения JSON профиля_", session.InterviewID)
+		h.bot.SendFormattedMessage(chatID, "✅ Интервью завершено!\n🆔 ID: `%s`\n\n_Используйте /getprofile для получения JSON файла профиля_", session.InterviewID)
 	}
 }
 
@@ -324,16 +309,17 @@ func (h *Handler) handleGetProfileCommand(chatID int64, session *UserSession) {
 		return
 	}
 
-	// Загружаем профиль из файла
+	// Путь к файлу профиля
 	fileName := fmt.Sprintf("output/profile_%s.json", session.InterviewID)
-	profileData, err := os.ReadFile(fileName)
-	if err != nil {
-		h.bot.SendMessage(chatID, "❌ Профиль не найден. Возможно, он еще не был создан или файл был удален.")
+
+	// Проверяем существование файла
+	if _, err := os.Stat(fileName); os.IsNotExist(err) {
+		h.bot.SendMessage(chatID, "❌ Файл профиля не найден. Возможно, он еще не был создан или был удален.")
 		return
 	}
 
 	h.bot.SendMessage(chatID, "📤 Отправляю ваш JSON профиль...")
-	h.sendJSONProfile(chatID, string(profileData), session.InterviewID)
+	h.sendJSONFile(chatID, fileName, session.InterviewID)
 }
 
 // handleGetSummaryCommand получает краткое резюме по команде
@@ -363,9 +349,9 @@ func (h *Handler) handleGetSummaryCommand(chatID int64, session *UserSession) {
 
 %s
 
-💾 Полный профиль: `+"`%s`"+`
+💾 Полный профиль сохранен в JSON файле
 
-_Используйте /getprofile для получения полного JSON профиля_`, summary, fileName)
+_Используйте /getprofile для получения файла_`, summary)
 
 		h.bot.SendMessage(chatID, resultMessage)
 	} else {
@@ -544,61 +530,23 @@ func (h *Handler) finishCurrentBlock(chatID int64, session *UserSession) {
 	h.startNextBlock(chatID, session)
 }
 
-// sendJSONProfile отправляет JSON профиль
-func (h *Handler) sendJSONProfile(chatID int64, profileJSON string, interviewID string) {
-	// Проверяем размер JSON
-	if len(profileJSON) > 4096 {
-		// Если JSON слишком большой, разбиваем на части
-		h.sendLargeJSONProfile(chatID, profileJSON, interviewID)
+// sendJSONFile отправляет JSON файл в чат
+func (h *Handler) sendJSONFile(chatID int64, fileName string, interviewID string) {
+	// Читаем содержимое файла
+	fileData, err := os.ReadFile(fileName)
+	if err != nil {
+		h.bot.SendMessage(chatID, "❌ Ошибка чтения файла: "+err.Error())
 		return
 	}
 
-	// Отправляем JSON в code block для лучшего форматирования
-	jsonMessage := fmt.Sprintf("📄 *Полный JSON профиль:*\n\n```json\n%s\n```", profileJSON)
-
-	err := h.bot.SendMessage(chatID, jsonMessage)
+	// Отправляем как документ через SendDocument API
+	err = h.bot.SendDocument(chatID, fileName, fileData, fmt.Sprintf("profile_%s.json", interviewID))
 	if err != nil {
-		// Если ошибка отправки (возможно, слишком длинное сообщение), пробуем разбить
-		h.sendLargeJSONProfile(chatID, profileJSON, interviewID)
-	}
-}
-
-// sendLargeJSONProfile отправляет большие JSON профили по частям
-func (h *Handler) sendLargeJSONProfile(chatID int64, profileJSON string, interviewID string) {
-	h.bot.SendMessage(chatID, "📄 *Полный JSON профиль (большой размер, отправляю частями):*")
-
-	// Максимальная длина сообщения в Telegram около 4096 символов
-	// Оставляем место для форматирования
-	maxChunkSize := 3500
-
-	jsonBytes := []byte(profileJSON)
-	totalChunks := (len(jsonBytes) + maxChunkSize - 1) / maxChunkSize
-
-	for i := 0; i < totalChunks; i++ {
-		start := i * maxChunkSize
-		end := start + maxChunkSize
-		if end > len(jsonBytes) {
-			end = len(jsonBytes)
-		}
-
-		chunk := string(jsonBytes[start:end])
-
-		// Форматируем каждую часть
-		chunkMessage := fmt.Sprintf("📄 *Часть %d/%d:*\n\n```json\n%s\n```",
-			i+1, totalChunks, chunk)
-
-		err := h.bot.SendMessage(chatID, chunkMessage)
-		if err != nil {
-			h.bot.SendMessage(chatID, fmt.Sprintf("❌ Ошибка отправки части %d профиля: %v", i+1, err))
-		}
-
-		// Небольшая задержка между сообщениями
-		time.Sleep(500 * time.Millisecond)
+		h.bot.SendMessage(chatID, "❌ Ошибка отправки файла: "+err.Error())
+		return
 	}
 
-	// Отправляем информацию о том, где найти полный файл
-	h.bot.SendMessage(chatID, fmt.Sprintf("✅ JSON профиль отправлен полностью!\n\n💾 Также сохранен в файле: `%s`",
-		fmt.Sprintf("output/profile_%s.json", interviewID)))
+	h.bot.SendMessage(chatID, "✅ JSON профиль отправлен как файл!")
 }
 
 // Вспомогательные методы
@@ -650,14 +598,6 @@ func (h *Handler) getStateDescription(state SessionState) string {
 	default:
 		return "Неизвестно"
 	}
-}
-
-func (h *Handler) isBlockComplete(question string) bool {
-	lowerQuestion := strings.ToLower(question)
-	return strings.Contains(lowerQuestion, "завершаем") ||
-		strings.Contains(lowerQuestion, "переходим") ||
-		strings.Contains(lowerQuestion, "блок завершен") ||
-		strings.Contains(lowerQuestion, "следующий блок")
 }
 
 func (h *Handler) getTotalAnswersCount(result *storage.InterviewResult) int {

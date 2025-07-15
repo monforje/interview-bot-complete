@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"time"
 )
@@ -78,6 +79,69 @@ func (b *Bot) SendMessage(chatID int64, text string) error {
 
 	if !response.OK {
 		return fmt.Errorf("Telegram API вернул ошибку при отправке сообщения")
+	}
+
+	return nil
+}
+
+// SendDocument отправляет файл в чат
+func (b *Bot) SendDocument(chatID int64, filePath string, fileData []byte, fileName string) error {
+	url := fmt.Sprintf("%s/sendDocument", b.baseURL)
+
+	// Создаем multipart form
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+
+	// Добавляем chat_id
+	writer.WriteField("chat_id", fmt.Sprintf("%d", chatID))
+
+	// Добавляем файл
+	part, err := writer.CreateFormFile("document", fileName)
+	if err != nil {
+		return fmt.Errorf("ошибка создания form file: %w", err)
+	}
+
+	_, err = part.Write(fileData)
+	if err != nil {
+		return fmt.Errorf("ошибка записи данных файла: %w", err)
+	}
+
+	// Добавляем caption
+	writer.WriteField("caption", fmt.Sprintf("📄 Ваш профиль: %s", fileName))
+
+	err = writer.Close()
+	if err != nil {
+		return fmt.Errorf("ошибка закрытия writer: %w", err)
+	}
+
+	// Отправляем запрос
+	req, err := http.NewRequest("POST", url, &buf)
+	if err != nil {
+		return fmt.Errorf("ошибка создания запроса: %w", err)
+	}
+
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("ошибка отправки документа: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("ошибка чтения ответа: %w", err)
+	}
+
+	var response SendMessageResponse
+	err = json.Unmarshal(body, &response)
+	if err != nil {
+		return fmt.Errorf("ошибка парсинга ответа: %w", err)
+	}
+
+	if !response.OK {
+		return fmt.Errorf("Telegram API вернул ошибку при отправке документа: %s", string(body))
 	}
 
 	return nil

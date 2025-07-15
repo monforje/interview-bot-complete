@@ -7,6 +7,7 @@ import (
 	"interview-bot-complete/internal/config"
 	"io"
 	"net/http"
+	"os"
 )
 
 // OpenAI API структуры
@@ -36,13 +37,22 @@ type APIError struct {
 	Type    string `json:"type"`
 }
 
-const (
-	openaiURL = "https://api.openai.com/v1/chat/completions"
-	model     = "gpt-4.1-mini"
-)
+const openaiURL = "https://api.openai.com/v1/chat/completions"
+
+// getModelFromEnv возвращает модель из переменных окружения
+func getModelFromEnv() string {
+	model := os.Getenv("OPENAI_MODEL")
+	if model == "" {
+		return "gpt-4.1-mini" // значение по умолчанию
+	}
+	return model
+}
 
 // callOpenAI делает запрос к OpenAI API
 func (s *Service) callOpenAI(messages []Message, cfg *config.Config) (string, error) {
+	// Получаем модель из переменных окружения
+	model := getModelFromEnv()
+
 	// Динамически рассчитываем max_tokens на основе конфигурации
 	maxTokens := 500 + (cfg.GetQuestionsPerBlock()+cfg.GetMaxFollowupQuestions())*100
 

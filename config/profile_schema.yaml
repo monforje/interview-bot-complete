@@ -1,0 +1,60 @@
+# Схема профиля в пополняемом формате для Viget
+# Базовая личная информация
+name: string
+age: int
+birth_city: string
+current_city: string
+native_language: string
+
+# Образование
+university: string
+education_level: string
+field_of_study: string
+graduation_year: int
+
+# Профессиональная информация
+current_position: string
+work_experience_years: int
+previous_companies: array
+career_goals: array
+
+# Навыки и компетенции
+hard_skills: array
+soft_skills: array
+programming_languages: array
+tools_and_technologies: array
+certifications: array
+
+# Интересы и хобби
+hobbies: array
+interests: array
+favorite_books: array
+favorite_movies: array
+sports: array
+
+# Личностные характеристики
+personality_traits: array
+values: array
+motivations: array
+work_style: string
+
+# Семья и отношения
+family_status: string
+has_children: bool
+relationship_status: string
+
+# Цели и планы
+short_term_goals: array
+long_term_goals: array
+dream_projects: array
+
+# Предпочтения
+preferred_work_environment: string
+communication_style: string
+learning_style: string
+
+# Дополнительная информация
+languages_spoken: array
+travel_experience: array
+volunteer_experience: array
+achievements: array

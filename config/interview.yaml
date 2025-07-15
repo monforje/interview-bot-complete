@@ -1,0 +1,182 @@
+# (файл переименован из config.yaml, содержимое не меняется) 
+
+interview_config:
+  total_blocks: 5
+  questions_per_block: 2
+  max_followup_questions: 0
+
+blocks:
+  - id: 1
+    name: "work_skills"
+    title: "Рабочие навыки"
+    context_prompt: |
+      Кратко выясни, какие ключевые рабочие навыки и умения есть у человека. Не уточняй профессию, интересует общий уровень и подход к работе.
+    focus_areas:
+      - "Технические и профессиональные навыки"
+      - "Умение решать задачи"
+    questions:
+      - "Какие навыки и умения вы считаете у себя наиболее развитыми?"
+      - "Как вы обычно решаете сложные рабочие задачи?"
+  - id: 2
+    name: "learning_growth"
+    title: "Обучаемость и развитие"
+    context_prompt: |
+      Узнай, как человек относится к обучению, новым знаниям и развитию. Важно понять, как он осваивает новое и реагирует на перемены.
+    focus_areas:
+      - "Обучаемость"
+      - "Гибкость мышления"
+    questions:
+      - "Как вы обычно осваиваете новые знания или навыки?"
+      - "Как вы реагируете на изменения в работе или жизни?"
+  - id: 3
+    name: "soft_skills"
+    title: "Взаимодействие с людьми"
+    context_prompt: |
+      Кратко выясни, как человек строит отношения, работает в команде, решает конфликты. Не уточняй детали, интересует общий стиль.
+    focus_areas:
+      - "Коммуникация"
+      - "Работа в команде"
+    questions:
+      - "Как вы обычно строите отношения с коллегами или новыми людьми?"
+      - "Как вы решаете разногласия или конфликты в коллективе?"
+  - id: 4
+    name: "motivation_goals"
+    title: "Мотивация и цели"
+    context_prompt: |
+      Узнай, что мотивирует человека, какие у него цели и приоритеты. Важно понять внутренние драйверы и ценности.
+    focus_areas:
+      - "Мотивация"
+      - "Цели и приоритеты"
+    questions:
+      - "Что вас больше всего мотивирует в работе и жизни?"
+      - "Какие цели для вас сейчас самые важные?"
+  - id: 5
+    name: "psychology_traits"
+    title: "Психологические особенности"
+    context_prompt: |
+      Кратко выясни основные личностные черты, стиль мышления, отношение к трудностям. Не углубляйся в частные случаи.
+    focus_areas:
+      - "Личностные черты"
+      - "Стрессоустойчивость"
+    questions:
+      - "Какие черты характера вы считаете у себя основными?"
+      - "Как вы обычно справляетесь с трудностями или стрессом?"
+
+profile_fields:
+  - adaptability
+  - analytical_thinking
+  - attention_to_detail
+  - autonomy
+  - collaboration
+  - communication
+  - conflict_resolution
+  - creativity
+  - critical_thinking
+  - curiosity
+  - decision_making
+  - emotional_intelligence
+  - empathy
+  - flexibility
+  - goal_orientation
+  - growth_mindset
+  - initiative
+  - integrity
+  - leadership
+  - learning_ability
+  - listening
+  - motivation
+  - open_mindedness
+  - organization
+  - perseverance
+  - planning
+  - presentation_skills
+  - problem_solving
+  - resilience
+  - responsibility
+  - self_confidence
+  - self_control
+  - self_development
+  - self_discipline
+  - self_reflection
+  - stress_management
+  - team_player
+  - time_management
+  - willingness_to_learn
+  - work_ethic
+  - work_life_balance
+  - ambition
+  - assertiveness
+  - coaching_ability
+  - competitiveness
+  - conscientiousness
+  - coping_with_failure
+  - customer_focus
+  - delegation
+  - dependability
+  - diplomacy
+  - discipline
+  - diversity_awareness
+  - drive_for_results
+  - enthusiasm
+  - facilitation
+  - feedback_acceptance
+  - focus
+  - friendliness
+  - honesty
+  - humility
+  - influence
+  - innovation
+  - integrity_at_work
+  - interpersonal_skills
+  - learning_from_mistakes
+  - listening_to_others
+  - logical_reasoning
+  - managing_ambiguity
+  - mentoring
+  - multitasking
+  - negotiation
+  - optimism
+  - patience
+  - people_development
+  - persuasion
+  - planning_and_organizing
+  - positive_attitude
+  - presentation
+  - prioritization
+  - proactivity
+  - project_management
+  - punctuality
+  - quality_focus
+  - relationship_building
+  - respect
+  - risk_management
+  - safety_awareness
+  - self_motivation
+  - service_orientation
+  - strategic_thinking
+  - taking_initiative
+  - task_completion
+  - technical_skills
+  - tolerance
+  - trustworthiness
+  - vision
+  - willingness_to_change
+  - work_under_pressure
+  - written_communication
+  - adaptability_to_change
+  - analytical_skills
+  - assertive_communication
+  - business_acumen
+  - change_management
+  - coaching
+  - conflict_management
+  - continuous_improvement
+
+summary_structure:
+  key_facts: []
+  important_themes: []
+  emotional_markers: []
+  behavioral_patterns: []
+  values_beliefs: []
+  priorities: []
+  sensitive_topics: [] 

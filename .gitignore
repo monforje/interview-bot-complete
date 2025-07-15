@@ -1,3 +1,5 @@
 .env
 !config/*.yaml
 *.yaml
+output
+results

@@ -51,9 +51,8 @@ func validateConfig(config *Config) error {
 	if len(config.ProfileFields) == 0 {
 		return fmt.Errorf("profile_fields не должны быть пустыми")
 	}
-	if len(config.ProfileFields) > 100 {
-		return fmt.Errorf("profile_fields не должны превышать 100 элементов")
-	}
+	// Убираем лимит на 100 элементов для profile_fields
+	// Теперь может быть любое количество полей
 
 	// Проверяем ID блоков и вопросы
 	for i, block := range config.Blocks {
